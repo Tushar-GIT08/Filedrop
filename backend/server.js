@@ -1,42 +1,107 @@
 const express = require("express");
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const multer = require("multer");
+
 
 const app = express();
-
 const PORT = process.env.PORT || 5001
 
-const codes_storage = []
+const transfers = new Map();
+const TRANSFER_TIME_MS = 10 * 60 * 1000; 
+
 
 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
 
-function generateCode() {
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-    let code = "";
+const MAX_FILE_SIZE = 100 * 1024 * 1024; 
 
-    for(let i = 0; i < 6; i++){
-        let temp = crypto.randomInt(chars.length)
-        code += chars[temp]
+const storage = multer.diskStorage({
+    destination: UPLOAD_DIR,
+    filename: (req, file, cb) => {
+        cb(null, crypto.randomUUID());
     }
-    return code
-}
+});
 
+const upload = multer({
+    storage: storage,
+    limits: { fileSize: MAX_FILE_SIZE }
+});
+
+function generateCode() {
+    
+    let code = null;
+
+    while (code === null || transfers.has(code)) {
+        code = "";
+
+        for (let i = 0; i < 6; i++) {
+            const temp = crypto.randomInt(chars.length);
+            code += chars[temp];
+        }
+    }
+
+    return code;
+}
 
 app.get("/", (request, response) => {
     console.log("GET / received");
     response.send("FileDrop backend is working!");
 });
 
-app.post("/api/transfers", (request, response) => {
+app.post("/api/transfers", upload.single("file"), (request, response) => {
+    
+    if (!request.file) {
+        return response.status(400).json({ error: "No file uploaded" });
+    }
 
     const code = generateCode();
 
-    const sent = { code : code }
+    const record = {
+        storedName: request.file.filename,
+        originalName: path.basename(request.file.originalname),
+        size: request.file.size,
+        mimeType: request.file.mimetype,
+        expiresAt: Date.now() + TRANSFER_TIME_MS,
+        status: "ready"
+    };
 
-    codes_storage.push(code)
+    transfers.set(code, record);
 
-    response.json(sent);
-    console.log(codes_storage)
+    return response.status(201).json({
+        code: code,
+        filename: record.originalName,
+        size: record.size,
+        expiresAt: record.expiresAt
+    });
 });
+
+app.use((err, req, res, next) => {
+    
+    if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+            const maxMB = MAX_FILE_SIZE / (1024 * 1024);
+            return res.status(413).json({
+                error: `File too large. Maximum allowed size is ${maxMB} MB.`
+            });
+        }
+
+        if (err.code === "LIMIT_UNEXPECTED_FILE") {
+            return res.status(400).json({
+                error: 'Unexpected field. The upload field must be named "file".'
+            });
+        }
+
+        return res.status(400).json({ error: err.message });
+    }
+
+    console.error(err);
+    return res.status(500).json({ error: "Something went wrong" });
+});
+
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
