@@ -47,6 +47,28 @@ function generateCode() {
     return code;
 }
 
+function findTransfer(code) {
+    
+    if (typeof code !== "string") {
+        return null;
+    }
+
+    const normalized = code.toUpperCase();
+    const validFormat = /^[A-Z0-9]{6}$/;
+
+    if (validFormat.test(normalized) === false) {
+        return null;
+    }
+
+    const record = transfers.get(normalized);
+
+    if (record) {
+        return record;
+    } else {
+        return null;
+    }
+}
+
 app.get("/", (request, response) => {
     console.log("GET / received");
     response.send("FileDrop backend is working!");
@@ -76,6 +98,33 @@ app.post("/api/transfers", upload.single("file"), (request, response) => {
         filename: record.originalName,
         size: record.size,
         expiresAt: record.expiresAt
+    });
+});
+
+app.get("/api/transfers/:code", (request, response) => {
+    
+    const record = findTransfer(request.params.code)
+
+    if (!record){
+        return response.status(404).json({error: "File not found" });
+    }
+
+    return response.json({ filename: record.originalName, size: record.size, expiresAt: record.expiresAt })
+})
+
+app.get("/api/transfers/:code/download", (request, response, next) => {
+    const record = findTransfer(request.params.code);
+
+    if (!record) {
+        return response.status(404).json({ error: "File not found" });
+    }
+
+    const filePath = path.join(UPLOAD_DIR, record.storedName);
+
+    response.download(filePath, record.originalName, (err) => {
+        if (err) {
+            next(err);
+        }
     });
 });
 
